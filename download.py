@@ -19,7 +19,7 @@ json_path = os.path.join(SCRIPT_DIR, "tick.json")           # Fichier des ticker
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data")               # Dossier de sortie
 
 # === Paramètres généraux ===
-START_DATE = "2020-01-01"   # Date de début de l’historique
+START_DATE = "2015-01-01"   # Date de début de l’historique
 END_DATE = None             # None => jusqu’à aujourd’hui
 
 # === Création du dossier de sortie s’il n’existe pas ===
@@ -39,7 +39,7 @@ def download_sector(sector_name, tickers):
     all_data = {}
 
     # Crée un index de dates journalières de 2015 à 2024
-    index = pd.date_range(start="2020-01-02", end="2025-10-31", freq="B")  # "B" = business days
+    index = pd.date_range(start="2015-01-01", end="2025-10-31", freq="B")  # "B" = business days
 
     # Crée un DataFrame vide avec cet index
     df = pd.DataFrame(index=index)
