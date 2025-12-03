@@ -39,7 +39,7 @@ def download_sector(sector_name, tickers):
     all_data = {}
 
     # Crée un index de dates journalières de 2015 à 2024
-    index = pd.date_range(start="2015-01-01", end="2025-10-31", freq="B")  # "B" = business days
+    index = pd.date_range(start=START_DATE, end="2025-10-31", freq="B")  # "B" = business days
 
     # Crée un DataFrame vide avec cet index
     df = pd.DataFrame(index=index)
