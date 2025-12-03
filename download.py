@@ -11,6 +11,7 @@ import os
 import pandas as pd
 import yfinance as yf
 from tqdm import tqdm
+from pathlib import Path
 import sys
 
 # === Chemins de base ===
@@ -31,6 +32,7 @@ with open(json_path, "r", encoding="utf-8") as f:
 
 total_tickers = sum(len(ticks) for ticks in sectors.values())
 print(f"Nombre total d'actions à télécharger : {total_tickers}")
+
 
 # === Fonction utilitaire ===
 def download_sector(sector_name, tickers):
@@ -66,6 +68,19 @@ def download_sector(sector_name, tickers):
     else:
         print(f" Aucun téléchargement réussi pour {sector_name}")
 
+
 # === Téléchargement par secteur ===
 for sector, tickers in sectors.items():
     download_sector(sector, tickers)
+
+folder = Path("./data")
+
+for csv_file in folder.glob("*.csv"):
+    df = pd.read_csv(csv_file, index_col=0)
+
+    df = df.dropna(how='all')
+
+    df.to_csv(csv_file)
+    print(f"Cleaned: {csv_file.name}")
+
+print("Done!")
