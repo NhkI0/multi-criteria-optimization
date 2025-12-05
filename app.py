@@ -100,8 +100,22 @@ class PortfolioOptimizer:
         """Fonction objectif pour minimiser la variance."""
         return np.dot(weights.T, np.dot(self.cov_matrix, weights))
 
-    def optimize(self, objective='max_sharpe', max_weight=0.1, min_weight=0.0):
-        """Optimise le portefeuille selon l'objectif spécifié."""
+    def optimize(self, objective='max_sharpe', max_weight=0.1, min_weight=0.0, K=None, delta_tol=0.001):
+        """
+        Optimise le portefeuille selon l'objectif spécifié.
+
+        Paramètres:
+        - objective: 'max_sharpe' ou 'min_variance'
+        - max_weight: poids maximum par actif
+        - min_weight: poids minimum par actif
+        - K: nombre d'actifs (cardinalité). Si None, pas de contrainte de cardinalité
+        - delta_tol: seuil de tolérance pour la cardinalité
+        """
+        # Si contrainte de cardinalité, utilise la méthode dédiée
+        if K is not None:
+            return self.optimize_with_cardinality(K, objective, max_weight, delta_tol)
+
+        # Sinon, optimisation classique
         initial_weights = np.array([1.0 / self.n_assets] * self.n_assets)
 
         constraints = (
@@ -128,6 +142,66 @@ class PortfolioOptimizer:
             returns, risk = self.portfolio_performance(result.x)
             sharpe = self.portfolio_sharpe_ratio(result.x)
             return result.x, returns, risk, sharpe
+        else:
+            return None, None, None, None
+
+    def optimize_with_cardinality(self, K, objective='max_sharpe', max_weight=0.1, delta_tol=0.001):
+        """
+        Optimise le portefeuille avec contrainte de cardinalité.
+        Contrainte: Exactement K actifs doivent avoir un poids > delta_tol
+        """
+        if K > self.n_assets:
+            return None, None, None, None
+
+        # Sélection des K meilleurs actifs par ratio de Sharpe individuel
+        individual_sharpe = (self.mean_returns - self.risk_free_rate) / np.sqrt(np.diag(self.cov_matrix))
+        selected_indices = np.argsort(individual_sharpe)[-K:]
+        selected_indices = np.sort(selected_indices)
+
+        # Optimisation restreinte aux K actifs sélectionnés
+        mean_returns_reduced = self.mean_returns.iloc[selected_indices]
+        cov_matrix_reduced = self.cov_matrix.iloc[selected_indices, selected_indices]
+
+        def portfolio_performance_reduced(w_reduced):
+            returns = np.dot(w_reduced, mean_returns_reduced)
+            risk = np.sqrt(np.dot(w_reduced.T, np.dot(cov_matrix_reduced, w_reduced)))
+            return returns, risk
+
+        def negative_sharpe_reduced(w_reduced):
+            returns, risk = portfolio_performance_reduced(w_reduced)
+            return -(returns - self.risk_free_rate) / risk
+
+        def variance_reduced(w_reduced):
+            return np.dot(w_reduced.T, np.dot(cov_matrix_reduced, w_reduced))
+
+        initial_weights_reduced = np.array([1.0 / K] * K)
+        constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1},)
+        bounds = tuple((delta_tol, max_weight) for _ in range(K))
+
+        if objective == 'max_sharpe':
+            obj_func = negative_sharpe_reduced
+        else:
+            obj_func = variance_reduced
+
+        result = minimize(
+            obj_func,
+            initial_weights_reduced,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints,
+            options={'maxiter': 1000, 'disp': False}
+        )
+
+        if result.success:
+            # Reconstruit le vecteur de poids complet
+            weights_full = np.zeros(self.n_assets)
+            weights_full[selected_indices] = result.x
+
+            # Calcule les performances
+            returns, risk = self.portfolio_performance(weights_full)
+            sharpe = self.portfolio_sharpe_ratio(weights_full)
+
+            return weights_full, returns, risk, sharpe
         else:
             return None, None, None, None
 
@@ -244,6 +318,26 @@ def main():
     ) / 100
     optimizer.risk_free_rate = risk_free_rate
 
+    # Contrainte de cardinalité
+    st.sidebar.subheader("Contrainte de Cardinalité")
+    enable_cardinality = st.sidebar.checkbox(
+        "Activer la contrainte de cardinalité",
+        value=False,
+        help="Limite le nombre d'actifs dans le portefeuille (K actifs exactement)"
+    )
+
+    K = None
+    if enable_cardinality:
+        K = st.sidebar.slider(
+            "Nombre d'actifs (K)",
+            min_value=5,
+            max_value=min(50, optimizer.n_assets),
+            value=20,
+            step=5,
+            help="Nombre exact d'actifs à inclure dans le portefeuille"
+        )
+        st.sidebar.info(f"Le portefeuille contiendra exactement {K} actifs sélectionnés par Sharpe ratio")
+
     # Onglets principaux
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Vue d'ensemble", "🎯 Optimisation", "📈 Frontière Efficiente", "📋 Comparaison"])
 
@@ -294,24 +388,38 @@ def main():
 
         with col1:
             st.subheader("🎯 Maximisation du Ratio de Sharpe")
-            st.write("Objectif: Meilleur rendement ajusté au risque")
+            if K is not None:
+                st.write(f"Objectif: Meilleur Sharpe ratio avec **exactement {K} actifs**")
+            else:
+                st.write("Objectif: Meilleur rendement ajusté au risque")
 
             if st.button("Optimiser (Max Sharpe)", use_container_width=True):
                 with st.spinner('Optimisation en cours...'):
-                    weights, returns, risk, sharpe = optimizer.optimize('max_sharpe', max_weight)
+                    weights, returns, risk, sharpe = optimizer.optimize('max_sharpe', max_weight, K=K)
+
+                    # Calcule la cardinalité réelle
+                    actual_K = np.sum(weights > 0.001) if weights is not None else 0
 
                     if weights is not None:
                         st.success("Optimisation réussie!")
 
                         # Métriques
-                        metric_col1, metric_col2, metric_col3 = st.columns(3)
-                        metric_col1.metric("Rendement", f"{returns:.2%}")
-                        metric_col2.metric("Risque", f"{risk:.2%}")
-                        metric_col3.metric("Sharpe", f"{sharpe:.3f}")
+                        if K is not None:
+                            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+                            metric_col1.metric("Rendement", f"{returns:.2%}")
+                            metric_col2.metric("Risque", f"{risk:.2%}")
+                            metric_col3.metric("Sharpe", f"{sharpe:.3f}")
+                            metric_col4.metric("Actifs", f"{actual_K}")
+                        else:
+                            metric_col1, metric_col2, metric_col3 = st.columns(3)
+                            metric_col1.metric("Rendement", f"{returns:.2%}")
+                            metric_col2.metric("Risque", f"{risk:.2%}")
+                            metric_col3.metric("Sharpe", f"{sharpe:.3f}")
 
                         # Allocation
-                        st.subheader("Top 10 Positions")
-                        portfolio_df = optimizer.get_portfolio_allocation(weights).head(10)
+                        st.subheader("Top 20 Positions")
+                        portfolio_df = optimizer.get_portfolio_allocation(weights).head(20)
+                        portfolio_df = optimizer.get_portfolio_allocation(weights).head(20)
                         portfolio_df['Poids'] = portfolio_df['Poids'].apply(lambda x: f"{x:.2%}")
                         portfolio_df['Investissement ($)'] = portfolio_df['Investissement ($)'].apply(lambda x: f"${x:,.0f}")
                         st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
@@ -338,24 +446,37 @@ def main():
 
         with col2:
             st.subheader("🛡️ Minimisation de la Variance")
-            st.write("Objectif: Risque le plus faible possible")
+            if K is not None:
+                st.write(f"Objectif: Variance minimale avec **exactement {K} actifs**")
+            else:
+                st.write("Objectif: Risque le plus faible possible")
 
             if st.button("Optimiser (Min Variance)", use_container_width=True):
                 with st.spinner('Optimisation en cours...'):
-                    weights, returns, risk, sharpe = optimizer.optimize('min_variance', max_weight)
+                    weights, returns, risk, sharpe = optimizer.optimize('min_variance', max_weight, K=K)
+
+                    # Calcule la cardinalité réelle
+                    actual_K = np.sum(weights > 0.001) if weights is not None else 0
 
                     if weights is not None:
                         st.success("Optimisation réussie!")
 
                         # Métriques
-                        metric_col1, metric_col2, metric_col3 = st.columns(3)
-                        metric_col1.metric("Rendement", f"{returns:.2%}")
-                        metric_col2.metric("Risque", f"{risk:.2%}")
-                        metric_col3.metric("Sharpe", f"{sharpe:.3f}")
+                        if K is not None:
+                            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+                            metric_col1.metric("Rendement", f"{returns:.2%}")
+                            metric_col2.metric("Risque", f"{risk:.2%}")
+                            metric_col3.metric("Sharpe", f"{sharpe:.3f}")
+                            metric_col4.metric("Actifs", f"{actual_K}")
+                        else:
+                            metric_col1, metric_col2, metric_col3 = st.columns(3)
+                            metric_col1.metric("Rendement", f"{returns:.2%}")
+                            metric_col2.metric("Risque", f"{risk:.2%}")
+                            metric_col3.metric("Sharpe", f"{sharpe:.3f}")
 
                         # Allocation
-                        st.subheader("Top 10 Positions")
-                        portfolio_df = optimizer.get_portfolio_allocation(weights).head(10)
+                        st.subheader("Top 20 Positions")
+                        portfolio_df = optimizer.get_portfolio_allocation(weights).head(20)
                         portfolio_df['Poids'] = portfolio_df['Poids'].apply(lambda x: f"{x:.2%}")
                         portfolio_df['Investissement ($)'] = portfolio_df['Investissement ($)'].apply(lambda x: f"${x:,.0f}")
                         st.dataframe(portfolio_df, use_container_width=True, hide_index=True)

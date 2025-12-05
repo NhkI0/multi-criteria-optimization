@@ -11,6 +11,7 @@ Contraintes:
 - Diversification
 - Limites par secteur
 - Non-négativité
+- Cardinalité (nombre fixe d'actifs)
 """
 
 import numpy as np
@@ -25,6 +26,7 @@ warnings.filterwarnings('ignore')
 DATA_DIR = Path("./data")
 INITIAL_CAPITAL = 1_000_000  # Capital initial en euros
 RISK_FREE_RATE = 0.02  # Taux sans risque annuel (2%)
+DELTA_TOL = 0.001  # Seuil de tolérance pour la cardinalité (0.1%)
 
 
 class PortfolioOptimizer:
@@ -172,6 +174,108 @@ class PortfolioOptimizer:
             print("  Optimisation échouée!")
             return None, None, None, None
 
+    def optimize_with_cardinality(self, K, objective='max_sharpe', max_weight=0.1, delta_tol=DELTA_TOL):
+        """
+        Optimise le portefeuille avec contrainte de cardinalité.
+
+        Contrainte: Exactement K actifs doivent avoir un poids > delta_tol
+
+        Paramètres:
+        - K: nombre d'actifs à sélectionner
+        - objective: 'max_sharpe' ou 'min_variance'
+        - max_weight: poids maximum par actif
+        - delta_tol: seuil de tolérance pour considérer un actif présent
+
+        Retourne:
+        - weights: vecteur de poids optimal
+        - returns: rendement du portefeuille
+        - risk: risque du portefeuille
+        - sharpe: ratio de Sharpe
+        - selected_assets: indices des K actifs sélectionnés
+        """
+        print(f"\nOptimisation avec cardinalité K={K} ({objective})...")
+
+        if K > self.n_assets:
+            print(f"  Erreur: K={K} > nombre d'actifs disponibles ({self.n_assets})")
+            return None, None, None, None, None
+
+        # Étape 1: Sélection des K meilleurs actifs par approche heuristique
+        # On utilise le ratio de Sharpe individuel comme critère de sélection
+        individual_sharpe = (self.mean_returns - RISK_FREE_RATE) / np.sqrt(np.diag(self.cov_matrix))
+
+        # Sélectionne les K actifs avec les meilleurs ratios de Sharpe
+        selected_indices = np.argsort(individual_sharpe)[-K:]
+        selected_indices = np.sort(selected_indices)  # Trie pour cohérence
+
+        print(f"  Actifs sélectionnés: {K}")
+        print(f"  Actifs: {[self.asset_names[i] for i in selected_indices[:5]]}{'...' if K > 5 else ''}")
+
+        # Étape 2: Optimisation restreinte aux K actifs sélectionnés
+        # Crée les matrices réduites
+        mean_returns_reduced = self.mean_returns.iloc[selected_indices]
+        cov_matrix_reduced = self.cov_matrix.iloc[selected_indices, selected_indices]
+
+        # Fonction objectif sur le sous-espace réduit
+        def portfolio_performance_reduced(w_reduced):
+            returns = np.dot(w_reduced, mean_returns_reduced)
+            risk = np.sqrt(np.dot(w_reduced.T, np.dot(cov_matrix_reduced, w_reduced)))
+            return returns, risk
+
+        def negative_sharpe_reduced(w_reduced):
+            returns, risk = portfolio_performance_reduced(w_reduced)
+            return -(returns - RISK_FREE_RATE) / risk
+
+        def variance_reduced(w_reduced):
+            return np.dot(w_reduced.T, np.dot(cov_matrix_reduced, w_reduced))
+
+        # Poids initiaux égaux sur les K actifs sélectionnés
+        initial_weights_reduced = np.array([1.0 / K] * K)
+
+        # Contraintes
+        constraints = (
+            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},
+        )
+
+        # Bornes
+        bounds = tuple((delta_tol, max_weight) for _ in range(K))
+
+        # Optimisation
+        if objective == 'max_sharpe':
+            obj_func = negative_sharpe_reduced
+        else:  # min_variance
+            obj_func = variance_reduced
+
+        result = minimize(
+            obj_func,
+            initial_weights_reduced,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints,
+            options={'maxiter': 1000, 'disp': False}
+        )
+
+        if result.success:
+            # Reconstruit le vecteur de poids complet
+            weights_full = np.zeros(self.n_assets)
+            weights_full[selected_indices] = result.x
+
+            # Calcule les performances
+            returns, risk = self.portfolio_performance(weights_full)
+            sharpe = self.portfolio_sharpe_ratio(weights_full)
+
+            # Vérifie la cardinalité
+            cardinality = np.sum(weights_full > delta_tol)
+
+            print(f"  Rendement attendu: {returns:.2%}")
+            print(f"  Risque (volatilité): {risk:.2%}")
+            print(f"  Ratio de Sharpe: {sharpe:.3f}")
+            print(f"  Cardinalité réelle: {cardinality} actifs")
+
+            return weights_full, returns, risk, sharpe, selected_indices
+        else:
+            print("  Optimisation échouée!")
+            return None, None, None, None, None
+
     def generate_efficient_frontier(self, n_portfolios=100):
         """Génère la frontière efficiente avec différents niveaux de risque cibles."""
         print(f"\nGénération de la frontière efficiente ({n_portfolios} portefeuilles)...")
@@ -318,6 +422,11 @@ def main():
     optimizer.load_data()
     optimizer.calculate_returns()
 
+    # === ÉTAPE 1: Optimisation classique (sans cardinalité) ===
+    print("\n" + "="*60)
+    print("ÉTAPE 1: OPTIMISATION CLASSIQUE")
+    print("="*60)
+
     # Optimisation: Max Sharpe Ratio
     weights_sharpe, ret_sharpe, risk_sharpe, sharpe_ratio = optimizer.optimize_max_sharpe()
     if weights_sharpe is not None:
@@ -330,7 +439,36 @@ def main():
         optimizer.analyze_portfolio(weights_minvar, "Portefeuille Min Variance")
         optimizer.save_portfolio(weights_minvar, "portfolio_min_variance.csv")
 
-    # Génération de la frontière efficiente
+    # === ÉTAPE 2: Optimisation avec contrainte de cardinalité ===
+    print("\n" + "="*60)
+    print("ÉTAPE 2: OPTIMISATION AVEC CARDINALITÉ")
+    print("="*60)
+
+    # Test avec différentes cardinalités
+    K_values = [20, 30]
+
+    for K in K_values:
+        # Max Sharpe avec cardinalité
+        weights_card_sharpe, ret_card, risk_card, sharpe_card, selected = \
+            optimizer.optimize_with_cardinality(K, objective='max_sharpe')
+
+        if weights_card_sharpe is not None:
+            optimizer.analyze_portfolio(weights_card_sharpe, f"Portefeuille Max Sharpe (K={K})")
+            optimizer.save_portfolio(weights_card_sharpe, f"portfolio_max_sharpe_K{K}.csv")
+
+        # Min Variance avec cardinalité
+        weights_card_minvar, ret_card_mv, risk_card_mv, sharpe_card_mv, selected_mv = \
+            optimizer.optimize_with_cardinality(K, objective='min_variance')
+
+        if weights_card_minvar is not None:
+            optimizer.analyze_portfolio(weights_card_minvar, f"Portefeuille Min Variance (K={K})")
+            optimizer.save_portfolio(weights_card_minvar, f"portfolio_min_variance_K{K}.csv")
+
+    # === Génération de la frontière efficiente ===
+    print("\n" + "="*60)
+    print("FRONTIÈRE EFFICIENTE")
+    print("="*60)
+
     frontier_weights, frontier_returns, frontier_risks = optimizer.generate_efficient_frontier(50)
 
     # Visualisation
