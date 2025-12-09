@@ -51,9 +51,9 @@ class ParetoPortfolioOptimizer:
         Returns:
             pareto_solutions: List of dicts with weights and objectives
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("LEVEL 1: Generating Pareto Front (Return-Risk)")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Method: Weighted Sum Scalarization")
         print(f"Points: {n_points}")
 
@@ -80,8 +80,8 @@ class ParetoPortfolioOptimizer:
             bounds = [(0, 1) for _ in range(self.n_assets)]
 
             result = minimize(objective, w_init, method='SLSQP',
-                            bounds=bounds, constraints=constraints,
-                            options={'maxiter': 500, 'disp': False})
+                              bounds=bounds, constraints=constraints,
+                              options={'maxiter': 500, 'disp': False})
 
             if result.success:
                 w = result.x
@@ -96,7 +96,7 @@ class ParetoPortfolioOptimizer:
                 })
 
             if (i + 1) % 10 == 0:
-                print(f"  Progress: {i+1}/{n_points} points generated")
+                print(f"  Progress: {i + 1}/{n_points} points generated")
 
         print(f"\n[OK] Generated {len(pareto_solutions)} Pareto-optimal portfolios")
 
@@ -127,9 +127,9 @@ class ParetoPortfolioOptimizer:
         Returns:
             pareto_solutions: List of dicts with weights and objectives
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("LEVEL 2: Generating Pareto Front (Return-Risk-Costs)")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Method: Weighted Sum with Cardinality K={K}")
         print(f"Points: {n_points}")
 
@@ -162,7 +162,7 @@ class ParetoPortfolioOptimizer:
 
         # Systematic sampling
         for alpha in np.linspace(0, 1, 6):
-            for beta in np.linspace(0, 1-alpha, 6):
+            for beta in np.linspace(0, 1 - alpha, 6):
                 gamma = 1 - alpha - beta
                 if gamma >= 0:
                     weight_combinations.append((alpha, beta, gamma))
@@ -190,8 +190,8 @@ class ParetoPortfolioOptimizer:
             bounds = [(0.001, 0.5) for _ in range(K)]  # min weight 0.1% to ensure K assets
 
             result = minimize(objective, w_init_k, method='SLSQP',
-                            bounds=bounds, constraints=constraints,
-                            options={'maxiter': 500, 'disp': False})
+                              bounds=bounds, constraints=constraints,
+                              options={'maxiter': 500, 'disp': False})
 
             if result.success:
                 w_k = result.x
@@ -214,7 +214,7 @@ class ParetoPortfolioOptimizer:
                 })
 
             if (i + 1) % 10 == 0:
-                print(f"  Progress: {i+1}/{n_points} points generated")
+                print(f"  Progress: {i + 1}/{n_points} points generated")
 
         print(f"\n[OK] Generated {len(pareto_solutions)} Pareto-optimal portfolios")
 

@@ -260,6 +260,152 @@ w^T × μ = R_target
 {'type': 'eq', 'fun': lambda w: np.dot(w, mean_returns) - target_return}
 ```
 
+### 5. Contrainte de Cardinalité (Niveau 2)
+
+```
+Σ I(wᵢ > δ_tol) = K
+```
+
+où **I(·)** est la fonction indicatrice (1 si vrai, 0 sinon).
+
+**Signification** : Le portefeuille doit contenir **exactement K actifs** avec des poids significatifs (> δ_tol).
+
+**Pourquoi cette contrainte ?**
+
+**Motivations pratiques** :
+- **Gestion simplifiée** : Moins d'actifs = plus facile à gérer et surveiller
+- **Coûts de transaction** : Réduire le nombre d'actifs limite les frais de trading
+- **Liquidité** : Concentration sur les actifs les plus liquides et performants
+- **Réalisme** : Les gestionnaires professionnels ont rarement des centaines d'actifs
+
+**Problème mathématique** :
+Cette contrainte transforme le problème en **optimisation mixte entière non-convexe** car :
+- La fonction indicatrice I(·) est discontinue
+- Le problème devient combinatoire : choisir K actifs parmi N (C(N,K) combinaisons possibles)
+- Pour N=192 et K=20, il y a environ 10²⁸ combinaisons !
+
+**Solutions possibles** :
+
+| Approche | Avantages | Inconvénients |
+|----------|-----------|---------------|
+| **MILP (Mixed-Integer Linear Programming)** | Optimum global garanti | Très lent pour grands N, K |
+| **Branch & Bound** | Explore l'arbre de décision | Complexité exponentielle |
+| **Algorithmes génétiques** | Gère bien les problèmes combinatoires | Non-déterministe, lent |
+| **Heuristique greedy** | Très rapide, bonne solution | Pas d'optimum global garanti |
+
+**Notre implémentation : Heuristique Greedy + Optimisation Continue**
+
+```python
+def optimize_with_cardinality(K, objective='max_sharpe'):
+    # Étape 1: Sélection des K meilleurs actifs
+    individual_sharpe = (mean_returns - r_f) / sqrt(diag(cov_matrix))
+    selected_indices = argsort(individual_sharpe)[-K:]  # Top K
+
+    # Étape 2: Optimisation continue sur le sous-ensemble
+    # Matrices réduites (K×K au lieu de N×N)
+    mean_returns_reduced = mean_returns[selected_indices]
+    cov_matrix_reduced = cov_matrix[selected_indices, selected_indices]
+
+    # Optimisation classique sur K actifs seulement
+    result = minimize(objective_func,
+                     initial_weights,
+                     bounds=(delta_tol, max_weight),  # min = delta_tol pour garantir wᵢ > 0
+                     constraints={'sum': 1})
+
+    # Étape 3: Reconstruction du vecteur complet
+    weights_full = zeros(N)
+    weights_full[selected_indices] = result.x
+
+    return weights_full
+```
+
+**Justification de l'heuristique** :
+
+1. **Critère de sélection - Sharpe individuel** :
+   ```
+   Sharpe_i = (μᵢ - r_f) / σᵢ
+   ```
+   - Mesure le rendement ajusté au risque de chaque actif isolément
+   - Actifs avec haut Sharpe individuel → probablement bons dans un portefeuille diversifié
+   - Calcul instantané O(N)
+
+2. **Réduction de dimension** :
+   - N=192 → K=20 : Réduit la matrice de covariance de 192×192 à 20×20
+   - Accélération dramatique : O(K³) << O(N³)
+   - Temps d'optimisation : < 1 seconde au lieu de plusieurs secondes
+
+3. **Qualité de la solution** :
+   - **Pas optimal globalement** mais proche en pratique
+   - Les meilleurs actifs individuels forment généralement un bon portefeuille
+   - Effet de diversification préservé avec K=20-30 actifs
+
+**Paramètres de la contrainte** :
+
+- **K** (cardinalité cible) :
+  - Trop petit (K < 10) : Sous-diversification, risque concentré
+  - Optimal (K = 20-30) : Bon équilibre diversification/simplicité
+  - Trop grand (K > 50) : Perd l'avantage de la contrainte
+
+- **δ_tol** (seuil de tolérance) :
+  - Par défaut : 0.1% (δ_tol = 0.001)
+  - Évite les poids microscopiques difficiles à gérer
+  - Borne inférieure de l'optimisation = δ_tol
+
+**Impact sur la performance** :
+
+**Avec cardinalité (K=20)** vs **Sans cardinalité** :
+
+| Métrique | Sans | Avec K=20 | Différence |
+|----------|------|-----------|------------|
+| Rendement | 32.44% | 41.54% | **+9.1pp** |
+| Risque | 19.35% | 26.97% | **+7.6pp** |
+| Sharpe | 1.574 | 1.466 | **-0.11** |
+| Nb actifs | ~19 | 15-20 | Plus contrôlé |
+
+**Observations** :
+- Rendement **augmente** : Concentration sur les meilleurs actifs
+- Risque **augmente** aussi : Moins de diversification
+- Sharpe légèrement **inférieur** : Compromis diversification vs performance
+- Nombre d'actifs **contrôlé** : Exactement K (ou légèrement moins si optimisation élimine certains)
+
+**Limites de l'approche** :
+
+1. **Pas d'optimum global garanti** : L'heuristique greedy peut manquer de meilleures combinaisons
+2. **Sensible au critère de sélection** : Utilise uniquement le Sharpe individuel
+3. **Ignore les corrélations initiales** : La sélection des K actifs ne considère pas les covariances
+4. **Stabilité temporelle** : Les K actifs sélectionnés peuvent changer fréquemment avec de nouvelles données
+
+**Améliorations possibles** :
+
+1. **Sélection par clustering** :
+   ```python
+   # Groupe les actifs par corrélation, sélectionne les meilleurs de chaque cluster
+   from sklearn.cluster import KMeans
+   clusters = KMeans(n_clusters=K).fit(correlation_matrix)
+   selected = [best_asset_in_cluster(c) for c in clusters]
+   ```
+
+2. **Multi-start** :
+   ```python
+   # Teste plusieurs combinaisons aléatoires, garde la meilleure
+   best_sharpe = -inf
+   for trial in range(10):
+       K_random = random.choice(assets, K)
+       weights = optimize_on_subset(K_random)
+       if sharpe(weights) > best_sharpe:
+           best = weights
+   ```
+
+3. **Recherche locale** :
+   ```python
+   # Optimise puis essaie de remplacer un actif par un autre
+   current_K = optimize_with_cardinality(K)
+   for swap in all_possible_swaps():
+       candidate = optimize_with_one_swap(swap)
+       if better(candidate, current_K):
+           current_K = candidate
+   ```
+
 ---
 
 ## Algorithme d'Optimisation
