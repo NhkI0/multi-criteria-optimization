@@ -9,6 +9,11 @@ from typing import Tuple, List, Dict
 import json
 
 
+def f3_transaction_cost(w, w_current, c_prop=0.001):
+    """f3(w) = Σ c_prop |w_i - w_current_i| (transaction costs)"""
+    return c_prop * np.sum(np.abs(w - w_current))
+
+
 class ParetoPortfolioOptimizer:
     """Multi-objective portfolio optimizer"""
 
@@ -34,10 +39,6 @@ class ParetoPortfolioOptimizer:
     def f2_variance(self, w):
         """f2(w) = w^T Σ w (portfolio variance)"""
         return np.dot(w, np.dot(self.Sigma, w))
-
-    def f3_transaction_cost(self, w, w_current, c_prop=0.001):
-        """f3(w) = Σ c_prop |w_i - w_current_i| (transaction costs)"""
-        return c_prop * np.sum(np.abs(w - w_current))
 
     # === LEVEL 1: Bi-objective (f1, f2) ===
 
@@ -205,7 +206,7 @@ class ParetoPortfolioOptimizer:
                     'f1_return': float(-self.f1_return(w_full)),
                     'f2_variance': float(self.f2_variance(w_full)),
                     'f2_volatility': float(np.sqrt(self.f2_variance(w_full))),
-                    'f3_transaction_cost': float(self.f3_transaction_cost(w_full, w_current, c_prop)),
+                    'f3_transaction_cost': float(f3_transaction_cost(w_full, w_current, c_prop)),
                     'alpha': float(alpha),
                     'beta': float(beta),
                     'gamma': float(gamma),

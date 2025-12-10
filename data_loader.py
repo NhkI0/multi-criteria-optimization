@@ -53,7 +53,7 @@ def load_portfolio_data(data_dir):
 
 if __name__ == "__main__":
     # Test the loader
-    data_dir = "../data"
+    data_dir = "data"
     prices, mu, Sigma, sectors = load_portfolio_data(data_dir)
     print(f"\nMean return range: {mu.min():.2%} to {mu.max():.2%}")
     print(f"Mean volatility: {np.sqrt(np.diag(Sigma)).mean():.2%}")

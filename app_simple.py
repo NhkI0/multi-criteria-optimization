@@ -22,7 +22,7 @@ st.set_page_config(
 @st.cache_data
 def load_asset_names():
     """Load asset ticker names from data files"""
-    data_dir = Path("../data")
+    data_dir = Path("data")
     if not data_dir.exists():
         return None
 
@@ -49,6 +49,7 @@ asset_names = load_asset_names()
 files_exist = all([
     Path('pareto_level1_weighted.json').exists(),
     Path('pareto_level1_epsilon.json').exists(),
+    Path('pareto_level1_nsga2.json').exists(),
     Path('pareto_level2_K20.json').exists()
 ])
 
@@ -60,10 +61,20 @@ if not files_exist:
 # Load Pareto fronts
 pareto_l1_weighted = load_pareto_front('pareto_level1_weighted.json')
 pareto_l1_epsilon = load_pareto_front('pareto_level1_epsilon.json')
+pareto_l1_nsga2 = load_pareto_front('pareto_level1_nsga2.json')
 pareto_l2_k20 = load_pareto_front('pareto_level2_K20.json')
 pareto_l2_k30 = load_pareto_front('pareto_level2_K30.json')
 
 # === Helper Functions ===
+
+def sample_portfolios(portfolios, max_count):
+    """Sample portfolios evenly across the Pareto front"""
+    if len(portfolios) <= max_count:
+        return portfolios
+
+    # Sample evenly across the front
+    indices = np.linspace(0, len(portfolios) - 1, max_count, dtype=int)
+    return [portfolios[i] for i in indices]
 
 def get_portfolio_label(portfolio, index=None):
     """Generate a meaningful label for a portfolio"""
@@ -81,7 +92,7 @@ def get_portfolio_label(portfolio, index=None):
     label = f"{risk_profile}: {ret:.1%} return, {risk:.1%} risk"
     return label
 
-def display_portfolio_details(portfolio, asset_names=None):
+def display_portfolio_details(portfolio, asset_names=None, portfolio_value=1_000_000):
     """Display detailed portfolio allocation"""
 
     # Metrics
@@ -109,14 +120,14 @@ def display_portfolio_details(portfolio, asset_names=None):
     non_zero_indices = np.where(weights > 0.001)[0]
     sorted_indices = non_zero_indices[np.argsort(weights[non_zero_indices])[::-1]]
 
-    st.subheader(f"Portfolio Holdings ({len(sorted_indices)} assets)")
+    st.subheader(f"Portfolio Holdings ({len(sorted_indices)} assets) - Total Value: ${portfolio_value:,.0f}")
 
     # Create detailed holdings table
     holdings_data = []
     for i in sorted_indices:
         ticker = asset_names[i] if asset_names and i < len(asset_names) else f"Asset_{i}"
         weight = weights[i]
-        value = weight * 1_000_000  # Assuming $1M portfolio
+        value = weight * portfolio_value
 
         holdings_data.append({
             'Ticker': ticker,
@@ -131,11 +142,7 @@ def display_portfolio_details(portfolio, asset_names=None):
     holdings_df['Value ($)'] = holdings_df['Value ($)'].apply(lambda x: f"${x:,.0f}")
 
     # Show top 20 by default
-    st.dataframe(holdings_df.head(20), use_container_width=True, hide_index=True)
-
-    if len(holdings_df) > 20:
-        with st.expander(f"Show all {len(holdings_df)} holdings"):
-            st.dataframe(holdings_df, use_container_width=True, hide_index=True)
+    st.dataframe(holdings_df, width='stretch', hide_index=True)
 
     # Download button
     csv = holdings_df.to_csv(index=False)
@@ -144,7 +151,7 @@ def display_portfolio_details(portfolio, asset_names=None):
         csv,
         "portfolio_allocation.csv",
         "text/csv",
-        use_container_width=True
+        width='stretch'
     )
 
 def create_clickable_scatter(portfolios, title, show_3d=False):
@@ -249,6 +256,31 @@ st.markdown("**Click on any portfolio in the graph to view details**")
 # === Sidebar ===
 st.sidebar.header("⚙️ Configuration")
 
+# Portfolio value selector
+st.sidebar.subheader("💰 Portfolio Settings")
+portfolio_value = st.sidebar.number_input(
+    "Portfolio Value ($)",
+    min_value=1_000,
+    max_value=100_000_000,
+    value=1_000_000,
+    step=100_000,
+    format="%d",
+    help="Enter the total amount you want to invest"
+)
+
+# Number of portfolios to display
+st.sidebar.subheader("📊 Display Settings")
+num_portfolios_display = st.sidebar.slider(
+    "Number of Portfolios to Show",
+    min_value=10,
+    max_value=100,
+    value=50,
+    step=5,
+    help="Control how many portfolios are shown in the visualization"
+)
+
+st.sidebar.markdown("---")
+
 level = st.sidebar.radio(
     "Select Optimization Level",
     ["Level 1: Bi-objective (Return-Risk)",
@@ -268,27 +300,48 @@ if "Level 1" in level:
     # Method selection
     method = st.sidebar.radio(
         "Optimization Method",
-        ["Weighted Sum Scalarization", "Epsilon-Constraint Method", "Compare Both"]
+        ["Weighted Sum Scalarization", "Epsilon-Constraint Method", "NSGA-2 (Evolutionary)", "Compare All Methods"]
     )
 
     if method == "Weighted Sum Scalarization":
-        portfolios = pareto_l1_weighted
+        portfolios_full = pareto_l1_weighted
+        portfolios = sample_portfolios(portfolios_full, num_portfolios_display)
         st.subheader("Method: Weighted Sum Scalarization")
         st.latex(r"\min_w \alpha \cdot f_1(w) + (1-\alpha) \cdot f_2(w)")
+        st.caption(f"Showing {len(portfolios)} of {len(portfolios_full)} portfolios")
 
     elif method == "Epsilon-Constraint Method":
-        portfolios = pareto_l1_epsilon
+        portfolios_full = pareto_l1_epsilon
+        portfolios = sample_portfolios(portfolios_full, num_portfolios_display)
         st.subheader("Method: Epsilon-Constraint")
         st.latex(r"\min_w f_1(w) \text{ s.t. } f_2(w) \leq \epsilon")
+        st.caption(f"Showing {len(portfolios)} of {len(portfolios_full)} portfolios")
 
-    else:  # Compare Both
-        st.subheader("Method Comparison")
+    elif method == "NSGA-2 (Evolutionary)":
+        portfolios_full = pareto_l1_nsga2
+        portfolios = sample_portfolios(portfolios_full, num_portfolios_display)
+        st.subheader("Method: NSGA-2 (Non-dominated Sorting Genetic Algorithm)")
+        st.markdown("""
+        **Evolutionary algorithm** that uses:
+        - Non-dominated sorting to rank solutions
+        - Crowding distance to maintain diversity
+        - Can find non-convex Pareto fronts
+        """)
+        st.caption(f"Showing {len(portfolios)} of {len(portfolios_full)} portfolios")
+
+    else:  # Compare All Methods
+        st.subheader("Method Comparison: All Three Algorithms")
+
+        # Sample portfolios for comparison
+        portfolios_w = sample_portfolios(pareto_l1_weighted, num_portfolios_display)
+        portfolios_e = sample_portfolios(pareto_l1_epsilon, num_portfolios_display)
+        portfolios_n = sample_portfolios(pareto_l1_nsga2, num_portfolios_display)
 
         fig = go.Figure()
 
         # Weighted sum
-        risks_w = [p['f2_volatility'] * 100 for p in pareto_l1_weighted]
-        returns_w = [p['f1_return'] * 100 for p in pareto_l1_weighted]
+        risks_w = [p['f2_volatility'] * 100 for p in portfolios_w]
+        returns_w = [p['f1_return'] * 100 for p in portfolios_w]
         hover_w = [f"<b>Weighted Sum</b><br>Risk: {r:.2f}%<br>Return: {ret:.2f}%"
                    for r, ret in zip(risks_w, returns_w)]
 
@@ -303,8 +356,8 @@ if "Level 1" in level:
         ))
 
         # Epsilon-constraint
-        risks_e = [p['f2_volatility'] * 100 for p in pareto_l1_epsilon]
-        returns_e = [p['f1_return'] * 100 for p in pareto_l1_epsilon]
+        risks_e = [p['f2_volatility'] * 100 for p in portfolios_e]
+        returns_e = [p['f1_return'] * 100 for p in portfolios_e]
         hover_e = [f"<b>Epsilon-Constraint</b><br>Risk: {r:.2f}%<br>Return: {ret:.2f}%"
                    for r, ret in zip(risks_e, returns_e)]
 
@@ -318,20 +371,54 @@ if "Level 1" in level:
             hoverinfo='text'
         ))
 
+        # NSGA-2
+        risks_n = [p['f2_volatility'] * 100 for p in portfolios_n]
+        returns_n = [p['f1_return'] * 100 for p in portfolios_n]
+        hover_n = [f"<b>NSGA-2</b><br>Risk: {r:.2f}%<br>Return: {ret:.2f}%"
+                   for r, ret in zip(risks_n, returns_n)]
+
+        fig.add_trace(go.Scatter(
+            x=risks_n,
+            y=returns_n,
+            mode='markers',
+            name='NSGA-2',
+            marker=dict(size=8, color='green', symbol='diamond', line=dict(width=1, color='white')),
+            hovertext=hover_n,
+            hoverinfo='text'
+        ))
+
         fig.update_layout(
-            title='Method Comparison',
+            title='Pareto Front Comparison: Three Optimization Methods',
             xaxis_title='Risk (Volatility) %',
             yaxis_title='Expected Return %',
-            height=600
+            height=600,
+            showlegend=True,
+            legend=dict(x=0.02, y=0.98)
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
+
+        # Summary statistics
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("Weighted Sum", f"{len(pareto_l1_weighted)} portfolios")
+            st.caption("✓ Fast convergence<br>✓ Smooth front<br>⚠ May miss non-convex regions", unsafe_allow_html=True)
+
+        with col2:
+            st.metric("Epsilon-Constraint", f"{len(pareto_l1_epsilon)} portfolios")
+            st.caption("✓ Robust<br>✓ Good for non-convex<br>⚠ Slower", unsafe_allow_html=True)
+
+        with col3:
+            st.metric("NSGA-2", f"{len(pareto_l1_nsga2)} portfolios")
+            st.caption("✓ Population-based<br>✓ Diverse solutions<br>✓ Handles complexity well", unsafe_allow_html=True)
 
         st.info("""
-        **Observations:**
-        - Both methods generate similar Pareto fronts
-        - Weighted sum: Faster, smoother curve
-        - Epsilon-constraint: More robust for non-convex problems
+        **Key Observations:**
+        - **Weighted Sum** and **Epsilon-Constraint** produce similar results (gradient-based methods)
+        - **NSGA-2** generates a denser, more diverse set of solutions
+        - All three methods converge to the same Pareto front, validating the results
+        - NSGA-2 is particularly good at exploring the entire solution space
         """)
 
         # Don't show portfolio selection for comparison mode
@@ -341,7 +428,7 @@ if "Level 1" in level:
     fig = create_clickable_scatter(portfolios, f'Pareto Front: {method}', show_3d=False)
 
     # Capture click events
-    selected_points = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="level1_plot")
+    selected_points = st.plotly_chart(fig, width='stretch', on_select="rerun", key="level1_plot")
 
     st.markdown("---")
 
@@ -398,7 +485,7 @@ if "Level 1" in level:
     if selected is not None:
         st.markdown("---")
         st.subheader("📊 Selected Portfolio Details")
-        display_portfolio_details(selected, asset_names)
+        display_portfolio_details(selected, asset_names, portfolio_value)
 
 # === LEVEL 2 ===
 else:
@@ -408,13 +495,15 @@ else:
 
     K_choice = st.sidebar.radio("Cardinality (K)", [20, 30])
 
-    portfolios = pareto_l2_k20 if K_choice == 20 else pareto_l2_k30
+    portfolios_full = pareto_l2_k20 if K_choice == 20 else pareto_l2_k30
+    portfolios = sample_portfolios(portfolios_full, num_portfolios_display)
 
     st.subheader(f"Tri-objective Pareto Front (K={K_choice} assets)")
+    st.caption(f"Showing {len(portfolios)} of {len(portfolios_full)} portfolios")
 
     # 3D plot
     fig = create_clickable_scatter(portfolios, f'3D Pareto Front (K={K_choice})', show_3d=True)
-    selected_points = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="level2_plot")
+    selected_points = st.plotly_chart(fig, width='stretch', on_select="rerun", key="level2_plot")
 
     st.markdown("---")
 
@@ -470,7 +559,7 @@ else:
     if selected is not None:
         st.markdown("---")
         st.subheader("📊 Selected Portfolio Details")
-        display_portfolio_details(selected, asset_names)
+        display_portfolio_details(selected, asset_names, portfolio_value)
 
 # === Footer ===
 st.sidebar.markdown("---")
@@ -480,6 +569,7 @@ st.sidebar.info("""
 **Methods**:
 - Weighted Sum Scalarization
 - Epsilon-Constraint
+- NSGA-2 (Evolutionary)
 
 **Levels**:
 - Level 1: Bi-objective (Return-Risk)
