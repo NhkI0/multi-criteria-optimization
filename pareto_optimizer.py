@@ -3,15 +3,57 @@ Multi-objective portfolio optimization with Pareto front generation
 Implements scalarization and epsilon-constraint methods
 """
 import numpy as np
-import pandas as pd
 from scipy.optimize import minimize
-from typing import Tuple, List, Dict
 import json
 
 
 def f3_transaction_cost(w, w_current, c_prop=0.001):
     """f3(w) = Σ c_prop |w_i - w_current_i| (transaction costs)"""
     return c_prop * np.sum(np.abs(w - w_current))
+
+
+def deduplicate_portfolios(portfolios, tolerance=1e-4):
+    """
+    Remove duplicate portfolios that are too similar
+
+    Args:
+        portfolios: List of portfolio dictionaries
+        tolerance: Maximum difference in weights to consider portfolios as duplicates
+
+    Returns:
+        Deduplicated list of portfolios
+    """
+    if not portfolios:
+        return portfolios
+
+    unique_portfolios = []
+
+    for portfolio in portfolios:
+        w = np.array(portfolio['weights'])
+        is_duplicate = False
+
+        # Check if this portfolio is too similar to any existing one
+        for unique_port in unique_portfolios:
+            w_unique = np.array(unique_port['weights'])
+
+            # Calculate maximum absolute difference in weights
+            max_diff = np.max(np.abs(w - w_unique))
+
+            if max_diff < tolerance:
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            unique_portfolios.append(portfolio)
+
+    return unique_portfolios
+
+
+def save_pareto_front(solutions, filename):
+    """Save Pareto front solutions to JSON"""
+    with open(filename, 'w') as f:
+        json.dump(solutions, f, indent=2)
+    print(f"\n[OK] Saved Pareto front to {filename}")
 
 
 class ParetoPortfolioOptimizer:
@@ -39,6 +81,38 @@ class ParetoPortfolioOptimizer:
     def f2_variance(self, w):
         """f2(w) = w^T Σ w (portfolio variance)"""
         return np.dot(w, np.dot(self.Sigma, w))
+
+    def compute_sector_info(self, w, threshold=0.001):
+        """
+        Compute sector allocation information for a portfolio
+
+        Args:
+            w: Portfolio weights
+            threshold: Minimum weight to consider an asset
+
+        Returns:
+            dict with 'sector_weights' and 'sector_allocation'
+        """
+        sector_weights = {}
+        sector_allocation = {}
+
+        for i, weight in enumerate(w):
+            if weight > threshold:
+                asset_name = self.asset_names[i]
+                sector = self.sector_mapping.get(asset_name, "Unknown")
+
+                # Accumulate weights by sector
+                sector_weights[sector] = sector_weights.get(sector, 0.0) + weight
+
+                # Track which assets belong to each sector
+                if sector not in sector_allocation:
+                    sector_allocation[sector] = []
+                sector_allocation[sector].append(i)
+
+        return {
+            'sector_weights': sector_weights,
+            'sector_allocation': sector_allocation
+        }
 
     # === LEVEL 1: Bi-objective (f1, f2) ===
 
@@ -86,6 +160,10 @@ class ParetoPortfolioOptimizer:
 
             if result.success:
                 w = result.x
+
+                # Compute sector information
+                sector_info = self.compute_sector_info(w)
+
                 pareto_solutions.append({
                     'weights': w.tolist(),
                     'f1_negative_return': float(self.f1_return(w)),
@@ -93,13 +171,21 @@ class ParetoPortfolioOptimizer:
                     'f2_variance': float(self.f2_variance(w)),
                     'f2_volatility': float(np.sqrt(self.f2_variance(w))),  # More interpretable
                     'alpha': float(alpha),
-                    'n_assets': int(np.sum(w > 0.001))
+                    'n_assets': int(np.sum(w > 0.001)),
+                    'sector_weights': sector_info['sector_weights'],
+                    'sector_allocation': sector_info['sector_allocation']
                 })
 
             if (i + 1) % 10 == 0:
                 print(f"  Progress: {i + 1}/{n_points} points generated")
 
         print(f"\n[OK] Generated {len(pareto_solutions)} Pareto-optimal portfolios")
+
+        # Remove duplicates
+        original_count = len(pareto_solutions)
+        pareto_solutions = deduplicate_portfolios(pareto_solutions, tolerance=1e-4)
+        if len(pareto_solutions) < original_count:
+            print(f"  Removed {original_count - len(pareto_solutions)} duplicates, {len(pareto_solutions)} unique portfolios remain")
 
         # Display range
         returns = [-sol['f1_negative_return'] for sol in pareto_solutions]
@@ -201,6 +287,9 @@ class ParetoPortfolioOptimizer:
                 w_full = np.zeros(self.n_assets)
                 w_full[best_k_indices] = w_k
 
+                # Compute sector information
+                sector_info = self.compute_sector_info(w_full)
+
                 pareto_solutions.append({
                     'weights': w_full.tolist(),
                     'f1_return': float(-self.f1_return(w_full)),
@@ -211,13 +300,21 @@ class ParetoPortfolioOptimizer:
                     'beta': float(beta),
                     'gamma': float(gamma),
                     'K': int(K),
-                    'n_assets': int(np.sum(w_full > 0.001))
+                    'n_assets': int(np.sum(w_full > 0.001)),
+                    'sector_weights': sector_info['sector_weights'],
+                    'sector_allocation': sector_info['sector_allocation']
                 })
 
             if (i + 1) % 10 == 0:
                 print(f"  Progress: {i + 1}/{n_points} points generated")
 
         print(f"\n[OK] Generated {len(pareto_solutions)} Pareto-optimal portfolios")
+
+        # Remove duplicates
+        original_count = len(pareto_solutions)
+        pareto_solutions = deduplicate_portfolios(pareto_solutions, tolerance=1e-4)
+        if len(pareto_solutions) < original_count:
+            print(f"  Removed {original_count - len(pareto_solutions)} duplicates, {len(pareto_solutions)} unique portfolios remain")
 
         # Display range
         returns = [sol['f1_return'] for sol in pareto_solutions]
@@ -230,12 +327,6 @@ class ParetoPortfolioOptimizer:
         return pareto_solutions
 
     # === Utility Functions ===
-
-    def save_pareto_front(self, solutions, filename):
-        """Save Pareto front solutions to JSON"""
-        with open(filename, 'w') as f:
-            json.dump(solutions, f, indent=2)
-        print(f"\n[OK] Saved Pareto front to {filename}")
 
     def get_portfolio_details(self, weights):
         """Get detailed allocation for a portfolio"""
@@ -265,8 +356,8 @@ if __name__ == "__main__":
 
     # Test Level 1
     pareto_l1 = optimizer.generate_pareto_front_level1(n_points=50)
-    optimizer.save_pareto_front(pareto_l1, 'pareto_level1.json')
+    save_pareto_front(pareto_l1, 'pareto_level1.json')
 
     # Test Level 2
     pareto_l2 = optimizer.generate_pareto_front_level2(K=20, n_points=30)
-    optimizer.save_pareto_front(pareto_l2, 'pareto_level2.json')
+    save_pareto_front(pareto_l2, 'pareto_level2.json')

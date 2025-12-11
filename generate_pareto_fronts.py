@@ -29,21 +29,21 @@ def main():
     print("\n[2/6] Level 1 - Weighted Sum Scalarization...")
     start = time.time()
     pareto_l1_weighted = optimizer.generate_pareto_front_level1(n_points=50)
-    optimizer.save_pareto_front(pareto_l1_weighted, 'pareto_level1_weighted.json')
+    save_pareto_front(pareto_l1_weighted, 'pareto_level1_weighted.json')
     print(f"  Time: {time.time() - start:.1f}s")
 
     # Method 2: Epsilon-Constraint (for comparison)
     print("\n[3/6] Level 1 - Epsilon-Constraint Method...")
     start = time.time()
     pareto_l1_epsilon = epsilon_opt.generate_pareto_front_epsilon_level1(n_points=30)
-    optimizer.save_pareto_front(pareto_l1_epsilon, 'pareto_level1_epsilon.json')
+    save_pareto_front(pareto_l1_epsilon, 'pareto_level1_epsilon.json')
     print(f"  Time: {time.time() - start:.1f}s")
 
     # Method 3: NSGA-2 (Evolutionary algorithm)
     print("\n[4/6] Level 1 - NSGA-2 Method...")
     start = time.time()
     pareto_l1_nsga2 = nsga2_opt.generate_pareto_front_nsga2_level1(pop_size=100, n_gen=150)
-    optimizer.save_pareto_front(pareto_l1_nsga2, 'pareto_level1_nsga2.json')
+    save_pareto_front(pareto_l1_nsga2, 'pareto_level1_nsga2.json')
     print(f"  Time: {time.time() - start:.1f}s")
 
     # === LEVEL 2: Tri-objective (Return-Risk-Costs) with Cardinality ===
@@ -56,7 +56,7 @@ def main():
         c_prop=0.001,
         n_points=40
     )
-    optimizer.save_pareto_front(pareto_l2, 'pareto_level2_K20.json')
+    save_pareto_front(pareto_l2, 'pareto_level2_K20.json')
     print(f"  Time: {time.time() - start:.1f}s")
 
     # Optional: Generate with different K values
@@ -68,7 +68,7 @@ def main():
         c_prop=0.001,
         n_points=40
     )
-    optimizer.save_pareto_front(pareto_l2_k30, 'pareto_level2_K30.json')
+    save_pareto_front(pareto_l2_k30, 'pareto_level2_K30.json')
     print(f"  Time: {time.time() - start:.1f}s")
 
     print("\n" + "=" * 70)

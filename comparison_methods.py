@@ -8,6 +8,43 @@ from deap import base, creator, tools, algorithms
 import random
 
 
+def deduplicate_portfolios(portfolios, tolerance=1e-4):
+    """
+    Remove duplicate portfolios that are too similar
+
+    Args:
+        portfolios: List of portfolio dictionaries
+        tolerance: Maximum difference in weights to consider portfolios as duplicates
+
+    Returns:
+        Deduplicated list of portfolios
+    """
+    if not portfolios:
+        return portfolios
+
+    unique_portfolios = []
+
+    for portfolio in portfolios:
+        w = np.array(portfolio['weights'])
+        is_duplicate = False
+
+        # Check if this portfolio is too similar to any existing one
+        for unique_port in unique_portfolios:
+            w_unique = np.array(unique_port['weights'])
+
+            # Calculate maximum absolute difference in weights
+            max_diff = np.max(np.abs(w - w_unique))
+
+            if max_diff < tolerance:
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            unique_portfolios.append(portfolio)
+
+    return unique_portfolios
+
+
 class EpsilonConstraintOptimizer:
     """
     Epsilon-constraint method for multi-objective optimization
@@ -17,10 +54,12 @@ class EpsilonConstraintOptimizer:
     subject to: f2(w) ≤ ε2, f3(w) ≤ ε3, C_Base
     """
 
-    def __init__(self, mean_returns, cov_matrix):
+    def __init__(self, mean_returns, cov_matrix, sector_mapping=None):
         self.mu = mean_returns.values
         self.Sigma = cov_matrix.values
         self.n_assets = len(self.mu)
+        self.asset_names = list(mean_returns.index)
+        self.sector_mapping = sector_mapping or {}
 
     def f1_return(self, w):
         return -np.dot(w, self.mu)
@@ -30,6 +69,25 @@ class EpsilonConstraintOptimizer:
 
     def f3_transaction_cost(self, w, w_current, c_prop):
         return c_prop * np.sum(np.abs(w - w_current))
+
+    def compute_sector_info(self, w, threshold=0.001):
+        """Compute sector allocation information for a portfolio"""
+        sector_weights = {}
+        sector_allocation = {}
+
+        for i, weight in enumerate(w):
+            if weight > threshold:
+                asset_name = self.asset_names[i]
+                sector = self.sector_mapping.get(asset_name, "Unknown")
+                sector_weights[sector] = sector_weights.get(sector, 0.0) + weight
+                if sector not in sector_allocation:
+                    sector_allocation[sector] = []
+                sector_allocation[sector].append(i)
+
+        return {
+            'sector_weights': sector_weights,
+            'sector_allocation': sector_allocation
+        }
 
     def generate_pareto_front_epsilon_level1(self, n_points=30):
         """
@@ -90,19 +148,31 @@ class EpsilonConstraintOptimizer:
 
             if result.success:
                 w = result.x
+
+                # Compute sector information
+                sector_info = self.compute_sector_info(w)
+
                 pareto_solutions.append({
                     'weights': w.tolist(),
                     'f1_return': float(-self.f1_return(w)),
                     'f2_variance': float(self.f2_variance(w)),
                     'f2_volatility': float(np.sqrt(self.f2_variance(w))),
                     'epsilon': float(epsilon),
-                    'n_assets': int(np.sum(w > 0.001))
+                    'n_assets': int(np.sum(w > 0.001)),
+                    'sector_weights': sector_info['sector_weights'],
+                    'sector_allocation': sector_info['sector_allocation']
                 })
 
             if (i + 1) % 10 == 0:
                 print(f"  Progress: {i+1}/{n_points} points generated")
 
         print(f"\n[OK] Generated {len(pareto_solutions)} solutions")
+
+        # Remove duplicates
+        original_count = len(pareto_solutions)
+        pareto_solutions = deduplicate_portfolios(pareto_solutions, tolerance=1e-4)
+        if len(pareto_solutions) < original_count:
+            print(f"  Removed {original_count - len(pareto_solutions)} duplicates, {len(pareto_solutions)} unique portfolios remain")
 
         # Display range
         returns = [sol['f1_return'] for sol in pareto_solutions]
@@ -123,10 +193,12 @@ class NSGA2Optimizer:
     - Can find non-convex Pareto fronts
     """
 
-    def __init__(self, mean_returns, cov_matrix):
+    def __init__(self, mean_returns, cov_matrix, sector_mapping=None):
         self.mu = mean_returns.values
         self.Sigma = cov_matrix.values
         self.n_assets = len(self.mu)
+        self.asset_names = list(mean_returns.index)
+        self.sector_mapping = sector_mapping or {}
 
     def f1_return(self, w):
         """Maximize return (minimize negative return)"""
@@ -154,6 +226,25 @@ class NSGA2Optimizer:
         else:
             w = np.ones(self.n_assets) / self.n_assets
         return w.tolist()
+
+    def compute_sector_info(self, w, threshold=0.001):
+        """Compute sector allocation information for a portfolio"""
+        sector_weights = {}
+        sector_allocation = {}
+
+        for i, weight in enumerate(w):
+            if weight > threshold:
+                asset_name = self.asset_names[i]
+                sector = self.sector_mapping.get(asset_name, "Unknown")
+                sector_weights[sector] = sector_weights.get(sector, 0.0) + weight
+                if sector not in sector_allocation:
+                    sector_allocation[sector] = []
+                sector_allocation[sector].append(i)
+
+        return {
+            'sector_weights': sector_weights,
+            'sector_allocation': sector_allocation
+        }
 
     def generate_pareto_front_nsga2_level1(self, pop_size=100, n_gen=150, verbose=True):
         """
@@ -247,13 +338,25 @@ class NSGA2Optimizer:
         pareto_solutions = []
         for ind in pareto_front:
             w = np.array(ind)
+
+            # Compute sector information
+            sector_info = self.compute_sector_info(w)
+
             pareto_solutions.append({
                 'weights': w.tolist(),
                 'f1_return': float(-self.f1_return(w)),
                 'f2_variance': float(self.f2_variance(w)),
                 'f2_volatility': float(np.sqrt(self.f2_variance(w))),
-                'n_assets': int(np.sum(w > 0.001))
+                'n_assets': int(np.sum(w > 0.001)),
+                'sector_weights': sector_info['sector_weights'],
+                'sector_allocation': sector_info['sector_allocation']
             })
+
+        # Remove duplicates
+        original_count = len(pareto_solutions)
+        pareto_solutions = deduplicate_portfolios(pareto_solutions, tolerance=1e-4)
+        if verbose and len(pareto_solutions) < original_count:
+            print(f"  Removed {original_count - len(pareto_solutions)} duplicates, {len(pareto_solutions)} unique portfolios remain")
 
         # Sort by risk for consistent visualization
         pareto_solutions.sort(key=lambda x: x['f2_volatility'])
