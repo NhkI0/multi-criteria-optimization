@@ -369,7 +369,12 @@ def create_clickable_scatter(portfolios, title, show_3d=False):
             scene=dict(
                 xaxis_title='Risk (Volatility) %',
                 yaxis_title='Expected Return %',
-                zaxis_title='Transaction Cost'
+                zaxis_title='Transaction Cost',
+                camera=dict(
+                    eye=dict(x=1, y=1, z=1),
+                    center=dict(x=0.15, y=0.15, z=0),
+                    up=dict(x=0, y=0, z=1)
+                )
             ),
             height=700,
             hovermode='closest'
