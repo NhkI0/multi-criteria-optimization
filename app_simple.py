@@ -88,8 +88,11 @@ def generate_nsga2_portfolios(pop_size, _mu, _Sigma, _sectors):
 
 
 @st.cache_data(show_spinner="Generating Level 2 portfolios...", show_time=True)
-def generate_level2_portfolios(K, n_points, _mu, _Sigma, _sectors):
-    """Generate Level 2 tri-objective Pareto front"""
+def generate_level2_portfolios(K, n_points, _mu, _Sigma, _sectors, version=2):
+    """Generate Level 2 tri-objective Pareto front
+
+    version=2: Uses adaptive K-asset selection for true 3D pyramid shape
+    """
     opt = ParetoPortfolioOptimizer(_mu, _Sigma, _sectors)
     return opt.generate_pareto_front_level2(K=K, w_current=None, c_prop=0.001, n_points=n_points)
 
