@@ -287,8 +287,49 @@ class NSGA2Optimizer:
         toolbox.register("select", tools.selNSGA2)
         toolbox.register("repair", self.repair_portfolio)
 
-        # Create initial population
-        pop = toolbox.population(n=pop_size)
+        # Create initial population with seeded extreme solutions
+        pop = toolbox.population(n=max(0, pop_size - 10))  # Random population
+
+        # Seed with extreme and high-quality solutions
+        # 1. Equal weights (diversified)
+        w_equal = np.ones(self.n_assets) / self.n_assets
+        pop.append(creator.Individual(w_equal.tolist()))
+
+        # 2. Top Sharpe ratio concentrated (high return extreme)
+        sharpe_ratios = (self.mu - 0.02) / np.sqrt(np.diag(self.Sigma))
+        top_indices = np.argsort(sharpe_ratios)[-5:]  # Top 5 assets
+        w_top = np.zeros(self.n_assets)
+        w_top[top_indices] = 1.0 / len(top_indices)
+        pop.append(creator.Individual(w_top.tolist()))
+
+        # 3-5. Concentrated in single top assets
+        for i in range(3):
+            if i < len(top_indices):
+                w_single = np.zeros(self.n_assets)
+                w_single[top_indices[-(i+1)]] = 1.0
+                pop.append(creator.Individual(w_single.tolist()))
+
+        # 6. Low volatility focused (low risk extreme)
+        vols = np.sqrt(np.diag(self.Sigma))
+        low_vol_indices = np.argsort(vols)[:10]
+        w_low_vol = np.zeros(self.n_assets)
+        w_low_vol[low_vol_indices] = 1.0 / len(low_vol_indices)
+        pop.append(creator.Individual(w_low_vol.tolist()))
+
+        # 7-10. Random high-quality seeds
+        for _ in range(4):
+            # Sample from top 30 Sharpe ratio assets
+            top_30 = np.argsort(sharpe_ratios)[-30:]
+            selected = np.random.choice(top_30, size=min(10, len(top_30)), replace=False)
+            w_random = np.zeros(self.n_assets)
+            weights = np.random.dirichlet(np.ones(len(selected)))
+            w_random[selected] = weights
+            pop.append(creator.Individual(w_random.tolist()))
+
+        # Ensure population size is exactly pop_size
+        while len(pop) < pop_size:
+            pop.append(toolbox.individual())
+        pop = pop[:pop_size]
 
         # Evaluate initial population
         fitnesses = list(map(toolbox.evaluate, pop))

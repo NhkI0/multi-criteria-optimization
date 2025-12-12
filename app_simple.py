@@ -82,8 +82,8 @@ def generate_epsilon_portfolios(n_points, _mu, _Sigma, _sectors):
 def generate_nsga2_portfolios(pop_size, _mu, _Sigma, _sectors):
     """Generate Pareto front using NSGA-2 method"""
     opt = NSGA2Optimizer(_mu, _Sigma, _sectors)
-    # Use pop_size as both population and number of generations for consistency
-    n_gen = max(50, pop_size)  # At least 50 generations
+    # Use more generations for better convergence and exploration
+    n_gen = max(150, pop_size * 2)  # At least 150 generations, scales with population
     return opt.generate_pareto_front_nsga2_level1(pop_size=pop_size, n_gen=n_gen, verbose=False)
 
 
@@ -659,11 +659,34 @@ else:
     st.markdown("**Objectives**: Maximize Return, Minimize Risk, Minimize Transaction Costs")
     st.markdown("**Constraints**: C_Base ∩ C_Op (budget + no short + cardinality K)")
 
-    K_choice = st.sidebar.radio("Cardinality (K)", [20, 30])
+    K_choice = st.sidebar.radio(
+        "Cardinality (K)",
+        [5, 10, 20, 30],
+        help="Number of assets in portfolio. Lower K = more concentrated (e.g., top performers like NVDA)"
+    )
 
     portfolios = generate_level2_portfolios(K_choice, num_portfolios_display, mu, Sigma, sectors)
 
     st.subheader(f"Tri-objective Pareto Front (K={K_choice} assets)")
+
+    # Add explanation based on K value
+    if K_choice <= 10:
+        st.info(f"""
+        **Concentrated Portfolio (K={K_choice})**:
+        - Focus on top performers (highest Sharpe ratios like NVDA, AVGO, AMD)
+        - Higher potential returns but also higher risk
+        - Less diversification
+        - Suitable for aggressive investors
+        """)
+    else:
+        st.info(f"""
+        **Diversified Portfolio (K={K_choice})**:
+        - Spread across more sectors and assets
+        - Lower risk through diversification
+        - More stable returns
+        - Suitable for balanced/conservative investors
+        """)
+
     st.caption(f"Generated {len(portfolios)} portfolios")
 
     # Portfolio selection & Filtering - Filter FIRST

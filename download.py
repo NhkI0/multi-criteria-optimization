@@ -20,7 +20,7 @@ json_path = os.path.join(SCRIPT_DIR, "tick.json")           # Fichier des ticker
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data")               # Dossier de sortie
 
 # === Paramètres généraux ===
-START_DATE = "2015-01-01"   # Date de début de l’historique
+START_DATE = "2022-01-01"   # Date de début de l’historique
 END_DATE = None             # None => jusqu’à aujourd’hui
 
 # === Création du dossier de sortie s’il n’existe pas ===
